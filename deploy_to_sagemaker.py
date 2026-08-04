@@ -94,12 +94,32 @@ try:
         RoleName=role_name,
         PolicyArn="arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
     )
-    print(f"Created role {role_arn}, waiting for IAM propagation...")
-    time.sleep(15)  # IAM roles take a few seconds to propagate
+    print(f"Created role {role_arn}")
 except iam_client.exceptions.EntityAlreadyExistsException:
     role_response = iam_client.get_role(RoleName=role_name)
     role_arn = role_response["Role"]["Arn"]
     print(f"Reusing existing role {role_arn}")
+
+# AmazonSageMakerFullAccess only auto-grants S3 access to buckets with
+# "sagemaker" in the name — our bucket doesn't match that pattern, so we
+# need an explicit inline policy scoped to this specific bucket.
+iam_client.put_role_policy(
+    RoleName=role_name,
+    PolicyName="CitadelS3BucketAccess",
+    PolicyDocument=json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"],
+            "Resource": [
+                f"arn:aws:s3:::{bucket_name}",
+                f"arn:aws:s3:::{bucket_name}/*"
+            ]
+        }]
+    })
+)
+print(f"Attached S3 bucket-access policy for {bucket_name}, waiting for IAM propagation...")
+time.sleep(15)  # IAM roles/policies take a few seconds to propagate
 
 # ---------------------------------------------------------------------------
 # 4. Deploy: Model -> EndpointConfig (with Data Capture) -> Endpoint

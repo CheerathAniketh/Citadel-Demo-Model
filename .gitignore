@@ -6,6 +6,9 @@ venv/
 .venv/
 env/
 *.egg-info/
+venv-train
+venvclear
+.venvclear/
 
 # Generated model artifacts — regenerable via generate_and_train.py,
 # no need to commit large/binary files to git
