@@ -21,7 +21,7 @@ import joblib
 import tarfile
 import os
 
-np.random.seed(42)
+np.random.seed(14)
 
 N = 2000  # training set size — plenty for a stable biased pattern
 
