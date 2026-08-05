@@ -9,7 +9,8 @@ env/
 venv-train
 venvclear
 .venvclear/
-
+train-venv
+deploy-venv
 # Generated model artifacts — regenerable via generate_and_train.py,
 # no need to commit large/binary files to git
 model.joblib
