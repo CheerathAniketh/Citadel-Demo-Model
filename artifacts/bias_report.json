@@ -1,0 +1,14 @@
+{
+  "held_out_accuracy": 0.7525,
+  "model_predictions_disparate_impact": 0.0,
+  "model_predictions_spd": 0.3478,
+  "feature_order": [
+    "years_experience",
+    "education_level",
+    "test_score",
+    "num_previous_companies",
+    "age",
+    "gender"
+  ],
+  "random_seed": 42
+}

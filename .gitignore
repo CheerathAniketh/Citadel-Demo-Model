@@ -1,2 +1,4 @@
-venv1/
-.ennv
+venv_train/
+
+.env
+venv-dep/
