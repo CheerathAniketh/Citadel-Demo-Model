@@ -7,26 +7,33 @@ SageMaker endpoint, Data Capture enabled) from `~/Projects/Model`.
 
 ## ⏭️ NEXT UP (do this first)
 
-- [ ] Run `python deploy.py` (from `venv-dep`) and see if it deploys cleanly now
-      that the model was retrained with NumPy 1.26.4.
-- [ ] If it succeeds: note the smoke-test response, then remember the endpoint
-      **bills per hour while running** — delete it when done testing:
-      ```bash
-      aws sagemaker delete-endpoint --endpoint-name citadel-biased-hiring-endpoint --region ap-south-1
-      aws sagemaker delete-endpoint-config --endpoint-config-name citadel-biased-hiring-endpoint --region ap-south-1
-      ```
-- [ ] If it fails: check CloudWatch logs first, before re-running blind —
-      ```bash
-      aws logs describe-log-streams \
-        --log-group-name /aws/sagemaker/Endpoints/citadel-biased-hiring-endpoint \
-        --region ap-south-1 --order-by LastEventTime --descending --max-items 5 \
-        --query "logStreams[*].{Name:logStreamName,LastEvent:lastEventTimestamp}" --output table
-      ```
-      then `get-log-events` on the most recent stream (see "Useful commands" below).
+- [ ] **Connect Citadel to the S3 Data Capture logs.** This is the actual
+      remaining goal — replace Citadel's mocked `monitor_predictions()` /
+      `get_predictions()` data with the real captured logs sitting in S3.
+      To do this properly we need to look at:
+      1. Wherever `monitor_predictions()` (or its mock) is defined in the
+         Citadel codebase — to see what data shape/schema it expects.
+      2. Whatever config Citadel uses to point at a data source (env var,
+         config file, connection string, etc.) — so we know where to point
+         it at the bucket/prefix below.
+      3. One real captured `.jsonl` file's actual contents, to confirm it
+         matches what Citadel expects to parse (SageMaker Data Capture wraps
+         request/response pairs in its own JSON envelope format — may need
+         a small parser adapter on the Citadel side).
+      - Data is waiting at:
+        `s3://citadel-ai-demo-aniketh-447788060954-v1/citadel-demo/data-capture/citadel-biased-hiring-endpoint/AllTraffic/`
+      - Sample a file directly from S3 to inspect the format:
+        ```bash
+        aws s3 cp s3://citadel-ai-demo-aniketh-447788060954-v1/citadel-demo/data-capture/citadel-biased-hiring-endpoint/AllTraffic/2026/08/08/02/35-17-940-757a2824-6167-4cef-919a-5898a4f5122d.jsonl -
+        ```
+- [ ] If more live traffic / a fresh capture is ever needed: the endpoint is
+      currently **shut down** (see below), so redeploy first with
+      `python deploy.py`, then rerun `python traffic.py`. Remember to check
+      for leftover endpoint configs before redeploying (see "Useful commands").
 
 ---
 
-## ✅ DONE (in order — today's session)
+## ✅ DONE (in order — full session so far)
 
 1. **`FileNotFoundError: inference.py`** during `deploy.py`
    - Cause: `SKLearnModel(entry_point="inference.py")` with no `source_dir` looks
@@ -81,6 +88,51 @@ SageMaker endpoint, Data Capture enabled) from `~/Projects/Model`.
      `delete-endpoint` / `delete-endpoint-config` returned "not found" — already
      clean).
 
+6. **Second morning attempt still hit `Cannot create already existing endpoint
+   configuration`**, even after last night's cleanup.
+   - Cause: same collision as issue #4 — an endpoint config with the same name
+     had gotten left behind again (deploy attempts partially succeed at
+     creating the config before failing later, so this recurs after *any*
+     interrupted/failed run, not just the numpy one).
+   - Fix: deleted the config again, confirmed `list-endpoints` was empty and
+     `delete-endpoint` returned "not found" (clean slate), then retried.
+
+7. **🎉 Deploy succeeded.**
+   ```
+   Endpoint deployed in 184s: citadel-biased-hiring-endpoint
+   Smoke-test response: {"predictions": [{"hired": 0, "probability": 0.103}]}
+   ```
+   Endpoint went `InService` on `ml.t2.medium`, Data Capture destination
+   confirmed active. The numpy/scipy/sklearn version fix from issue #5 held up.
+
+8. **Ran `python traffic.py`** (231 requests, 10 batches, ~1-2 min total).
+   - All 231 requests succeeded, logged locally to `traffic_log.jsonl`.
+   - **Live bias check on real endpoint traffic:**
+     - Male hire rate: 0.369 (n=111)
+     - Female hire rate: **0.000** (n=120)
+     - Observed DI: **0.000** — far below the 0.80 fairness threshold.
+   - This matches/reinforces the training-time bias report (`SPD=0.348`) —
+     the deployed model reproduces the same severe bias pattern on fresh,
+     unseen traffic (different random seed than training).
+
+9. **Confirmed Data Capture logs landed in S3:**
+   ```bash
+   aws s3 ls s3://citadel-ai-demo-aniketh-447788060954-v1/citadel-demo/data-capture/ --recursive
+   ```
+   4 `.jsonl` files present — two small smoke-test captures from the first
+   deploy, plus two larger batches (~68KB, ~64KB) from the `traffic.py` run.
+   This is real captured data, ready for Citadel to read.
+
+10. **Shut the endpoint down** to stop billing (goal — real S3 Data Capture
+    logs for Citadel — was achieved; no need to keep it running):
+    ```bash
+    aws sagemaker delete-endpoint --endpoint-name citadel-biased-hiring-endpoint --region ap-south-1
+    aws sagemaker delete-endpoint-config --endpoint-config-name citadel-biased-hiring-endpoint --region ap-south-1
+    ```
+    Confirmed via `list-endpoints` that nothing is left running.
+    **Important:** the S3 Data Capture logs persist even with the endpoint
+    deleted — deleting only stops compute billing, doesn't touch the bucket.
+
 ---
 
 ## 🗂️ Key facts / config (for future me)
@@ -98,6 +150,15 @@ SageMaker endpoint, Data Capture enabled) from `~/Projects/Model`.
 - **Training venv:** `venv_train` (Python 3.12) — pins now frozen in
   `requirements1.txt` (numpy 1.26.4, scipy 1.13.1, scikit-learn 1.4.2, joblib 1.4.2, ...)
 - **Deploy venv:** `venv-dep` — used to run `deploy.py` / AWS CLI
+- **Data Capture S3 path:**
+  `s3://citadel-ai-demo-aniketh-447788060954-v1/citadel-demo/data-capture/citadel-biased-hiring-endpoint/AllTraffic/`
+  (partitioned by date/hour under this prefix, `.jsonl` files)
+- **Current endpoint status: SHUT DOWN** (deleted after confirming Data
+  Capture worked, to stop billing). Redeploy with `python deploy.py` if
+  needed again — model artifact + `requirements.txt` fix are already baked
+  into `artifacts/model.tar.gz`, so it should deploy clean.
+- **Observed live bias (from `traffic.py` run, 231 requests):** male hire
+  rate 0.369 (n=111), female hire rate 0.000 (n=120), DI = 0.000.
 
 ---
 
@@ -157,3 +218,22 @@ aws service-quotas list-service-quotas \
 - CloudWatch logs (`/aws/sagemaker/Endpoints/<name>`) are the actual source of
   truth for container-side failures — the local traceback from `deploy.py` often
   just says "health check failed" with no detail.
+- Endpoint config name collisions (`Cannot create already existing endpoint
+  configuration`) recur after *any* interrupted/failed deploy attempt, not
+  just specific failures — get in the habit of running the cleanup check
+  before every `deploy.py` run, not only after a known failure.
+
+---
+
+## 🔌 Citadel connection — what's needed
+
+Not done yet. To wire Citadel's `monitor_predictions()` / Connect mode to
+read this real S3 data instead of mocks, need to look at:
+1. The `monitor_predictions()` / `get_predictions()` code in Citadel — what
+   shape/schema does it expect?
+2. Citadel's config mechanism for pointing at a data source.
+3. An actual sample of the captured `.jsonl` format from S3 (SageMaker Data
+   Capture uses its own JSON envelope around request/response pairs — likely
+   needs a small parsing adapter).
+
+Bring the relevant Citadel source file(s) next session to figure this out.
