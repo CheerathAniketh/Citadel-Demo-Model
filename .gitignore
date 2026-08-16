@@ -2,3 +2,4 @@ venv_train/
 
 .env
 venv-dep/
+venv_dep/
