@@ -12,6 +12,8 @@ Output:
 
 Run:
     python3 generate.py
+
+    some commands right now 
 """
 
 import os
